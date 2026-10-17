@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>経費メモ → 仕訳CSV 変換デモ</title>
+<style>
+  :root {
+    --text: #1f2937;
+    --muted: #5b6573;
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --border: #d5dbe3;
+    --accent: #1d4ed8;
+    --accent-weak: #e8effd;
+    --warn-bg: #fff3e0;
+    --warn-text: #9a3412;
+    --note-text: #475569;
+    --ok: #166534;
+    --ng: #b91c1c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+  }
+  main { max-width: 1040px; margin: 0 auto; padding: 20px 14px 48px; }
+  h1 { font-size: 1.5rem; margin: 8px 0 4px; }
+  .lead { margin: 0 0 20px; color: var(--muted); }
+  section.step {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+    min-width: 0;
+  }
+  section.step[hidden] { display: none; }
+  h2 { font-size: 1.1rem; margin: 0 0 10px; }
+  h2 .num {
+    display: inline-block; min-width: 1.6em; height: 1.6em; line-height: 1.6em;
+    text-align: center; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: .9rem; margin-right: 8px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  button, .btn {
+    font: inherit; cursor: pointer;
+    border: 1px solid var(--accent); background: var(--card); color: var(--accent);
+    border-radius: 8px; padding: 8px 16px;
+  }
+  button.primary { background: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible {
+    outline: 3px solid #93b4f8; outline-offset: 2px;
+  }
+  a { color: var(--accent); }
+  input[type=file] { max-width: 100%; }
+  #message { margin: 10px 0 0; min-height: 1.2em; }
+  #message.error { color: var(--ng); }
+  #message.info { color: var(--muted); }
+  .mapping { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+  .mapping label { display: block; font-weight: 600; font-size: .9rem; }
+  .mapping select { width: 100%; margin-top: 2px; }
+  select { font: inherit; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: #fff; max-width: 100%; }
+  .summary { margin: 0 0 10px; display: flex; flex-wrap: wrap; gap: 6px 24px; font-weight: 600; }
+  .summary .ok { color: var(--ok); }
+  .summary .ng { color: var(--ng); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; min-width: 760px; font-size: .92rem; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+  th { background: var(--accent-weak); position: sticky; top: 0; white-space: nowrap; }
+  td.amount, th.amount { text-align: right; white-space: nowrap; }
+  tr.need td { background: var(--warn-bg); }
+  .issue { color: var(--warn-text); font-weight: 600; }
+  .note { color: var(--note-text); }
+  .hint { color: var(--muted); font-size: .9rem; margin: 6px 0 0; }
+  footer.disclaimer {
+    color: var(--muted); font-size: .88rem; border-top: 1px solid var(--border);
+    padding-top: 12px; margin-top: 8px;
+  }
+  @media (max-width: 480px) {
+    main { padding: 12px 8px 32px; }
+    h1 { font-size: 1.25rem; }
+    section.step { padding: 12px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>経費メモ → 仕訳CSV 変換デモ</h1>
+  <p class="lead">Excel や CSV の経費メモを、会計ソフトに取り込みやすい仕訳の形に整えます。データはこのブラウザの中だけで処理され、外部には送信されません。</p>
+
+  <section class="step" id="step1">
+    <h2><span class="num">1</span>ファイルを選ぶ</h2>
+    <div class="row">
+      <input type="file" id="file-input" accept=".xlsx,.xls,.csv" aria-label="経費メモのファイル（xlsx・xls・csv）">
+      <button type="button" id="btn-sample">サンプルデータで試す</button>
+      <a href="sample.csv" download="sample.csv" id="link-sample">サンプルCSVをダウンロード</a>
+    </div>
+    <p id="message" class="info" role="status"></p>
+  </section>
+
+  <section class="step" id="step2" hidden>
+    <h2><span class="num">2</span>列の対応を確かめる</h2>
+    <p class="hint" style="margin:0 0 8px">自動で見当をつけました。違っていたら選び直してください（すぐに変換し直します）。</p>
+    <div class="mapping" id="mapping"></div>
+  </section>
+
+  <section class="step" id="step3" hidden>
+    <h2><span class="num">3</span>変換結果を確かめる</h2>
+    <div class="summary">
+      <span id="summary-count"></span>
+      <span id="summary-total"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="result-table">
+        <thead>
+          <tr>
+            <th scope="col">取引日</th>
+            <th scope="col">借方勘定科目</th>
+            <th scope="col" class="amount">金額</th>
+            <th scope="col">貸方勘定科目</th>
+            <th scope="col">摘要</th>
+            <th scope="col">状態</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="hint">色のついた行は「要確認」です。勘定科目はプルダウンで直せます。</p>
+  </section>
+
+  <section class="step" id="step4" hidden>
+    <h2><span class="num">4</span>仕訳CSVをダウンロード</h2>
+    <button type="button" class="primary" id="btn-download">仕訳CSVをダウンロード</button>
+  </section>
+
+  <footer class="disclaimer">
+    列の並び・文字コードは見本です。実際にお使いの会計ソフトの取込仕様に合わせて調整します。消費税区分・部門・補助科目はこのデモでは扱いません。サンプルの店名・金額は架空です。
+  </footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous" defer></script>
+<script>
+(function () {
+  'use strict';
+
+  // ===== 定数 =====
+
+  // サンプルCSV（sample.csv と同内容。file:// でも動くよう埋め込む）
+  const SAMPLE_CSV = `10月 経費メモ（総務）
+
+利用日,用途,支払額,払い方,メモ
+2026/10/1,サンプル文具店 コピー用紙,"1,980",現金,A4 5冊
+2026-10-02,タクシー サンプル交通,"¥2,350",カード,
+令和８年１０月３日,切手 サンプル郵便局,"３，５００",現金,
+R8.10.5,会議用コーヒー サンプルカフェ,"1,200円",現金,
+R8/10/6,新幹線 サンプル出張 往復,"¥28,000",クレジットカード,
+10/7,〇〇商店 雑貨,3200,現金,
+10月8日,振込手数料 サンプル銀行,330,振込,
+2026年10月9日,取引先 会食 サンプル食堂,"12,800",カード,
+2026/10/10,電気料金 サンプル電力 10月分,"18,420",口座引落,
+2026/10/12,セミナー参加費 サンプル研修社,"9,900",振込,
+2026/10/13,雑誌 サンプル書店,"1,100",,
+2026/10/14,USBメモリ サンプル電機,"2,480",カード,
+2026/10/15,ゆうパック発送 サンプル運送,"1,450",現金,
+2026/10/16,サンプル文具店 返金（コピー用紙）,"△1,980",現金,
+2026/02/30,駐車場 サンプルパーク,600,現金,
+2026/10/19,ガソリン代 サンプル石油,"4,300",カード,
+2026/10/20,打ち合わせ弁当 サンプル弁当店,"5,400",現金,
+2026/10/21,携帯電話利用料 サンプルモバイル,"7,820",口座引落,
+2026/10/22,お茶・飲料水 サンプル商会,"2,160",現金,
+2026/10/23,健康診断 サンプルクリニック,"11,000",振込,
+`;
+
+  // 借方科目のキーワード辞書。複数該当は先に書いたものを優先する（辞書順）
+  const DEBIT_RULES = [
+    { subject: '旅費交通費', words: ['タクシー', '電車', 'バス', '新幹線', '高速', '駐車', 'ガソリン', 'Suica'] },
+    { subject: '消耗品費', words: ['文具', 'コピー用紙', 'トナー', '電池', 'USB', 'Amazon', 'アスクル'] },
+    { subject: '通信費', words: ['切手', '郵便', '宅配', 'ゆうパック', 'レターパック', '携帯', '電話', 'インターネット'] },
+    { subject: '会議費', words: ['会議', '打合せ', '打ち合わせ', 'コーヒー', 'カフェ', '弁当'] },
+    { subject: '接待交際費', words: ['接待', '会食', '手土産', '贈答', 'お中元', 'お歳暮'] },
+    { subject: '新聞図書費', words: ['書籍', '書店', '参考書', '新聞', '雑誌'] },
+    { subject: '支払手数料', words: ['振込手数料', '手数料'] },
+    { subject: '水道光熱費', words: ['電気', 'ガス', '水道'] },
+    { subject: '福利厚生費', words: ['健康診断', '慶弔', 'お茶', '飲料水'] },
+    { subject: '研修費', words: ['セミナー', '研修', '講習'] },
+  ];
+  // プルダウンの借方候補。「雑費」は辞書に無いが、手で選べるようにしておく
+  const DEBIT_OPTIONS = DEBIT_RULES.map((r) => r.subject).concat(['雑費']);
+  const CREDIT_OPTIONS = ['現金', '未払金', '普通預金'];
+
+  // 列見出しの同義語（先頭ほど優先）。1文字の語は誤爆しやすいので完全一致でのみ使う
+  const HEADER_SYNONYMS = {
+    date: ['日付', '日', '年月日', '利用日', '取引日', '支払日', '発生日', 'date'],
+    amount: ['金額', '支払額', '支払金額', '税込金額', '税込', '利用額', '請求額', '円', 'amount'],
+    content: ['内容', '摘要', '品名', '用途', '明細', '備考', '件名', 'メモ', 'description'],
+    payment: ['支払方法', '決済方法', '決済', '支払区分', '払い方', '支払手段', '支払'],
+  };
+  const FIELD_LABELS = { date: '日付', content: '内容', amount: '金額', payment: '支払方法' };
+  const HEADER_SCAN_ROWS = 10; // ヘッダ行を探す行数
+  const CSV_HEADER = ['取引日', '借方勘定科目', '借方金額', '貸方勘定科目', '貸方金額', '摘要'];
+  const CSV_BOM = '\uFEFF';
+
+  // 和暦の元年の西暦 − 1（令和1年=2019 → 2018 + 1）
+  const ERA_BASE = { 令和: 2018, 平成: 1988, 昭和: 1925, R: 2018, H: 1988, S: 1925 };
+  // Excel シリアル値として扱う範囲（1954〜2118年頃）。小さな数を日付と誤認しないための下限
+  const SERIAL_MIN = 20000;
+  const SERIAL_MAX = 80000;
+
+  // ===== 共通ユーティリティ =====
+
+  /** 全角→半角などの正規化（NFKC）をかけた文字列にする */
+  function norm(v) {
+    return String(v === null || v === undefined ? '' : v).normalize('NFKC').trim();
+  }
+
+  function isBlank(v) {
+    return v === null || v === undefined || String(v).trim() === '';
+  }
+
+  function pad2(n) {
+    return String(n).padStart(2, '0');
+  }
+
+  // ===== CSV の読み書き =====
+
+  /**
+   * CSV 文字列を 2 次元配列にする（引用符・改行入りセル・CRLF に対応）。
+   * 先頭の BOM は取り除く。
+   */
+  function parseCSV(text) {
+    const src = text.replace(/^\uFEFF/, '');
+    const table = [];
+    let row = [];
+    let cell = '';
+    let inQuotes = false;
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (src[i + 1] === '"') { cell += '"'; i++; } else { inQuotes = false; }
+        } else {
+          cell += ch;
+        }
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        row.push(cell); cell = '';
+      } else if (ch === '\r' || ch === '\n') {
+        if (ch === '\r' && src[i + 1] === '\n') i++;
+        row.push(cell); table.push(row); row = []; cell = '';
+      } else {
+        cell += ch;
+      }
+    }
+    if (cell !== '' || row.length > 0) { row.push(cell); table.push(row); }
+    return table;
+  }
+
+  /**
+   * CSV の 1 セルを書き出し用に整える。
+   * 先頭が = + - @ の文字列は、Excel で開いたときに数式として実行されないよう ' を前置する。
+   * 数値（金額）には使わない。
+   */
+  function csvCell(value, isText) {
+    let s = String(value === null || value === undefined ? '' : value);
+    if (isText && /^[=+\-@]/.test(s)) s = "'" + s;
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  /** 出力行を CSV 文字列（CRLF・BOM なし）にする */
+  function buildCsv(rows) {
+    const lines = [CSV_HEADER.join(',')];
+    rows.forEach((r) => {
+      const amt = r.amount === null ? '' : String(r.amount);
+      lines.push([
+        csvCell(r.date), csvCell(r.debit), csvCell(amt),
+        csvCell(r.credit), csvCell(amt), csvCell(r.desc, true),
+      ].join(','));
+    });
+    return lines.join('\r\n') + '\r\n';
+  }
+
+  // ===== 日付の正規化 =====
+
+  function isValidYmd(y, m, d) {
+    if (!(y >= 1900 && y <= 2200 && m >= 1 && m <= 12 && d >= 1)) return false;
+    return d <= new Date(Date.UTC(y, m, 0)).getUTCDate();
+  }
+
+  /** Excel のシリアル値 → {y,m,d}。範囲外は null */
+  function serialToParts(n) {
+    if (!(n >= SERIAL_MIN && n <= SERIAL_MAX)) return null;
+    const t = new Date(Date.UTC(1899, 11, 30) + Math.floor(n) * 86400000);
+    return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate() };
+  }
+
+  /**
+   * 日付らしい値を {y,m,d} に分解する。年が無い書式は y=null。読めなければ null。
+   * 暦として正しいかの検証は呼び出し側（normalizeDate）で行う。
+   */
+  function parseDateParts(raw) {
+    if (isBlank(raw)) return null;
+    if (typeof raw === 'number') return serialToParts(raw);
+    // 曜日「(木)」と時刻は日付の判定に不要なので落とす
+    const s = norm(raw).replace(/[(][月火水木金土日祝][)]/g, '').replace(/\s+\d{1,2}:\d{2}(:\d{2})?.*$/, '').trim();
+    let m;
+    if (/^\d{5}(\.\d+)?$/.test(s)) return serialToParts(parseFloat(s));
+    if ((m = s.match(/^(令和|平成|昭和|[RHS])\s*(元|\d{1,2})\s*[./年-]\s*(\d{1,2})\s*[./月-]\s*(\d{1,2})\s*日?$/i))) {
+      const yy = m[2] === '元' ? 1 : parseInt(m[2], 10);
+      return { y: ERA_BASE[m[1].toUpperCase()] + yy, m: +m[3], d: +m[4] };
+    }
+    if ((m = s.match(/^(\d{4})\s*[./年-]\s*(\d{1,2})\s*[./月-]\s*(\d{1,2})\s*日?$/)) || (m = s.match(/^(\d{4})(\d{2})(\d{2})$/))) {
+      return { y: +m[1], m: +m[2], d: +m[3] };
+    }
+    if ((m = s.match(/^(\d{1,2})\s*[./月-]\s*(\d{1,2})\s*日?$/))) {
+      return { y: null, m: +m[1], d: +m[2] };
+    }
+    return null;
+  }
+
+  /**
+   * 日付を "YYYY/MM/DD" にする。読めない・存在しない日付（2/30 等）は null。
+   * 年の無い書式には defaultYear を補う。
+   */
+  function normalizeDate(raw, defaultYear) {
+    const p = parseDateParts(raw);
+    if (!p) return null;
+    const y = p.y === null ? defaultYear : p.y;
+    if (!isValidYmd(y, p.m, p.d)) return null;
+    return y + '/' + pad2(p.m) + '/' + pad2(p.d);
+  }
+
+  /** 年のある日付の中で最も多い年を返す。無ければ今年 */
+  function mostCommonYear(rawDates) {
+    const count = {};
+    rawDates.forEach((raw) => {
+      const p = parseDateParts(raw);
+      if (p && p.y !== null && isValidYmd(p.y, p.m, p.d)) count[p.y] = (count[p.y] || 0) + 1;
+    });
+    const years = Object.keys(count).sort((a, b) => count[b] - count[a]);
+    return years.length ? +years[0] : new Date().getFullYear();
+  }
+
+  // ===== 金額の正規化 =====
+
+  /**
+   * 金額を数値にする。読めなければ null（空・文字列・小数を含む）。
+   * ¥ 円 カンマ 空白を除き、△ ▲ - 全角マイナス ( ) はマイナスにする。
+   */
+  function parseAmount(raw) {
+    if (isBlank(raw)) return null;
+    if (typeof raw === 'number') {
+      // Excel の浮動小数点の誤差だけを丸める。本物の小数は読めない扱いにする
+      return Math.abs(raw - Math.round(raw)) < 1e-6 ? Math.round(raw) : null;
+    }
+    let s = norm(raw).replace(/[−‐‑–—]/g, '-').replace(/[¥円,\s]/g, '');
+    let negative = false;
+    if (/^[△▲-]/.test(s)) { negative = true; s = s.slice(1); }
+    if (/^\(.*\)$/.test(s)) { negative = true; s = s.slice(1, -1); }
+    if (!/^\d+$/.test(s)) return null;
+    const n = parseInt(s, 10);
+    return negative ? -n : n;
+  }
+
+  // ===== 勘定科目の推定 =====
+
+  /** 内容から借方科目を推定する。該当なしは空文字（推測で埋めない） */
+  function guessDebit(desc) {
+    const s = norm(desc).toLowerCase();
+    // 「振込手数料」は他の語より手数料を優先する（辞書順に任せると別科目になりうる）
+    if (s.includes('振込手数料')) return '支払手数料';
+    const hit = DEBIT_RULES.find((rule) => rule.words.some((w) => s.includes(w.toLowerCase())));
+    return hit ? hit.subject : '';
+  }
+
+  /**
+   * 支払方法から貸方科目を推定する。
+   * 空は現金を既定とし assumed=true（注意表示）。判定できない語は空文字（要確認）。
+   */
+  function guessCredit(raw) {
+    const s = norm(raw);
+    if (s === '') return { account: '現金', assumed: true };
+    if (s.includes('現金')) return { account: '現金', assumed: false };
+    if (/カード|クレジット|クレカ/.test(s)) return { account: '未払金', assumed: false };
+    if (/振込|口座|引落|引き落/.test(s)) return { account: '普通預金', assumed: false };
+    return { account: '', assumed: false };
+  }
+
+  // ===== 列の自動推定 =====
+
+  /** 見出しセルが同義語に合うか。完全一致、または 2 文字以上の語の部分一致 */
+  function headerMatches(cell, syn, exactOnly) {
+    const c = norm(cell).toLowerCase();
+    if (c === '') return false;
+    if (c === syn.toLowerCase()) return true;
+    return !exactOnly && syn.length >= 2 && c.includes(syn.toLowerCase());
+  }
+
+  /** 最初の 10 行から、見出しらしい行（同義語に合うセルが最も多い行）の位置を返す */
+  function findHeaderRow(table) {
+    let best = 0;
+    let bestScore = 0;
+    table.slice(0, HEADER_SCAN_ROWS).forEach((row, i) => {
+      const score = row.filter((cell) => typeof cell === 'string' && Object.values(HEADER_SYNONYMS)
+        .some((syns) => syns.some((syn) => headerMatches(cell, syn, false)))).length;
+      if (score > bestScore) { best = i; bestScore = score; }
+    });
+    return best;
+  }
+
+  /** 見出し行から {date, content, amount, payment} の列番号を推定する（無ければ -1） */
+  function guessMapping(headers) {
+    const map = { date: -1, content: -1, amount: -1, payment: -1 };
+    const used = new Set();
+    // まず全項目を完全一致で割り当て、残りを部分一致で補う（「支払日」を支払方法に取られないため）
+    [true, false].forEach((exactOnly) => {
+      Object.keys(map).forEach((field) => {
+        if (map[field] !== -1) return;
+        for (const syn of HEADER_SYNONYMS[field]) {
+          const idx = headers.findIndex((h, i) => !used.has(i) && headerMatches(h, syn, exactOnly));
+          if (idx !== -1) { map[field] = idx; used.add(idx); return; }
+        }
+      });
+    });
+    return map;
+  }
+
+  // ===== 変換 =====
+
+  /** 行の問題点（要確認の理由）の一覧。画面の編集で変わるので都度計算する */
+  function rowIssues(row) {
+    const issues = [];
+    if (!row.date) issues.push('日付を読み取れません');
+    if (row.amount === null) issues.push('金額を読み取れません');
+    else if (row.amount === 0) issues.push('金額が0です');
+    else if (row.amount < 0) issues.push('マイナス金額です（返金等）');
+    if (!row.debit) issues.push('勘定科目を判定できません');
+    if (!row.credit) issues.push('支払方法を判定できません');
+    return issues;
+  }
+
+  /** 要確認ではない「注意」表示 */
+  function rowNotes(row) {
+    return row.creditAssumed && row.credit === '現金' ? ['支払方法なし→現金とみなしました'] : [];
+  }
+
+  /** 表（2 次元配列）と列の対応から変換結果の行を作る */
+  function convert(table, headerRow, map) {
+    const cell = (r, idx) => (idx >= 0 && idx < r.length ? r[idx] : '');
+    const body = table.slice(headerRow + 1)
+      .filter((r) => ['date', 'content', 'amount'].some((f) => !isBlank(cell(r, map[f]))));
+    const defaultYear = mostCommonYear(body.map((r) => cell(r, map.date)));
+    return body.map((r) => {
+      const credit = guessCredit(cell(r, map.payment));
+      const desc = String(cell(r, map.content)).trim();
+      return {
+        date: normalizeDate(cell(r, map.date), defaultYear) || '',
+        amount: parseAmount(cell(r, map.amount)),
+        desc,
+        debit: guessDebit(desc),
+        credit: credit.account,
+        creditAssumed: credit.assumed,
+      };
+    });
+  }
+
+  function inputTotal(rows) {
+    return rows.reduce((sum, r) => sum + (r.amount === null ? 0 : r.amount), 0);
+  }
+
+  /** 出力（CSV の借方金額）の合計。入力合計と突き合わせて取りこぼしを検知する */
+  function outputTotal(rows) {
+    return rows.reduce((sum, r) => sum + (r.amount === null ? 0 : r.amount), 0);
+  }
+
+  function needsCheck(row) {
+    return rowIssues(row).length > 0;
+  }
+
+  // ===== 画面 =====
+
+  const state = { table: [], headerRow: 0, map: null, rows: [], sourceName: '' };
+  const $ = (id) => document.getElementById(id);
+
+  function fmtYen(n) {
+    return (n < 0 ? '-' : '') + '¥' + Math.abs(n).toLocaleString('ja-JP');
+  }
+
+  function colLetter(i) {
+    let s = '';
+    for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+    return s;
+  }
+
+  function showMessage(text, kind) {
+    const el = $('message');
+    el.textContent = text;
+    el.className = kind || 'info';
+  }
+
+  function makeSelect(options, value, label, blankLabel) {
+    const sel = document.createElement('select');
+    sel.setAttribute('aria-label', label);
+    const list = blankLabel === undefined ? options : [''].concat(options);
+    list.forEach((opt) => {
+      const o = document.createElement('option');
+      o.value = opt;
+      o.textContent = opt === '' ? blankLabel : opt;
+      sel.appendChild(o);
+    });
+    sel.value = value;
+    return sel;
+  }
+
+  /** 列の対応づけ用 select を作り直す */
+  function renderMapping() {
+    const box = $('mapping');
+    box.textContent = '';
+    const header = state.table[state.headerRow] || [];
+    const width = Math.max(header.length, ...state.table.slice(0, 50).map((r) => r.length));
+    ['date', 'content', 'amount', 'payment'].forEach((field) => {
+      const label = document.createElement('label');
+      label.textContent = FIELD_LABELS[field] + (field === 'payment' ? '（なくても可）' : '');
+      const sel = document.createElement('select');
+      sel.dataset.field = field;
+      const none = document.createElement('option');
+      none.value = '-1';
+      none.textContent = field === 'payment' ? '（なし）' : '（選択してください）';
+      sel.appendChild(none);
+      for (let i = 0; i < width; i++) {
+        const o = document.createElement('option');
+        o.value = String(i);
+        const name = isBlank(header[i]) ? '列' + (i + 1) : String(header[i]).trim();
+        o.textContent = name + '（' + colLetter(i) + '列）';
+        sel.appendChild(o);
+      }
+      sel.value = String(state.map[field]);
+      sel.addEventListener('change', onMappingChange);
+      label.appendChild(sel);
+      box.appendChild(label);
+    });
+  }
+
+  function onMappingChange() {
+    document.querySelectorAll('#mapping select').forEach((sel) => {
+      state.map[sel.dataset.field] = parseInt(sel.value, 10);
+    });
+    runConvert();
+  }
+
+  /** 1 行分の「状態」欄と行の色を現在の値から更新する */
+  function renderRowStatus(tr, row) {
+    const issues = rowIssues(row);
+    const notes = rowNotes(row);
+    tr.classList.toggle('need', issues.length > 0);
+    const cell = tr.querySelector('td.status');
+    cell.textContent = '';
+    if (issues.length) {
+      const s = document.createElement('span');
+      s.className = 'issue';
+      s.textContent = '要確認：' + issues.join('／');
+      cell.appendChild(s);
+    }
+    if (notes.length) {
+      if (issues.length) cell.appendChild(document.createElement('br'));
+      const s = document.createElement('span');
+      s.className = 'note';
+      s.textContent = '注意：' + notes.join('／');
+      cell.appendChild(s);
+    }
+    if (!issues.length && !notes.length) cell.textContent = 'OK';
+  }
+
+  function renderSummary() {
+    const total = state.rows.length;
+    const need = state.rows.filter(needsCheck).length;
+    $('summary-count').textContent = '全' + total + '件／要確認' + need + '件';
+    const inp = inputTotal(state.rows);
+    const out = outputTotal(state.rows);
+    const el = $('summary-total');
+    el.textContent = '';
+    el.appendChild(document.createTextNode('入力合計 ' + fmtYen(inp) + ' ／ 出力合計 ' + fmtYen(out) + ' '));
+    const mark = document.createElement('span');
+    mark.className = inp === out ? 'ok' : 'ng';
+    mark.textContent = inp === out ? '（一致✓）' : '（不一致✗）';
+    el.appendChild(mark);
+  }
+
+  function textCell(text, cls) {
+    const td = document.createElement('td');
+    td.textContent = text;
+    if (cls) td.className = cls;
+    return td;
+  }
+
+  function renderTable() {
+    const tbody = document.querySelector('#result-table tbody');
+    tbody.textContent = '';
+    state.rows.forEach((row, i) => {
+      const tr = document.createElement('tr');
+      tr.appendChild(textCell(row.date));
+
+      const debitSel = makeSelect(DEBIT_OPTIONS, row.debit, '行' + (i + 1) + ' 借方勘定科目', '（選択してください）');
+      debitSel.classList.add('debit');
+      debitSel.addEventListener('change', () => { row.debit = debitSel.value; renderRowStatus(tr, row); renderSummary(); });
+      const tdDebit = document.createElement('td');
+      tdDebit.appendChild(debitSel);
+      tr.appendChild(tdDebit);
+
+      tr.appendChild(textCell(row.amount === null ? '' : fmtYen(row.amount), 'amount'));
+
+      const creditSel = makeSelect(CREDIT_OPTIONS, row.credit, '行' + (i + 1) + ' 貸方勘定科目', '（選択してください）');
+      creditSel.classList.add('credit');
+      creditSel.addEventListener('change', () => {
+        row.credit = creditSel.value;
+        row.creditAssumed = false; // 自分で選び直したら「現金とみなした」注意は不要
+        renderRowStatus(tr, row);
+        renderSummary();
+      });
+      const tdCredit = document.createElement('td');
+      tdCredit.appendChild(creditSel);
+      tr.appendChild(tdCredit);
+
+      tr.appendChild(textCell(row.desc));
+      tr.appendChild(textCell('', 'status'));
+      renderRowStatus(tr, row);
+      tbody.appendChild(tr);
+    });
+    renderSummary();
+  }
+
+  /** 現在の表と列の対応で変換し直して画面に出す */
+  function runConvert() {
+    const ready = state.map.date >= 0 && state.map.content >= 0 && state.map.amount >= 0;
+    $('step3').hidden = !ready;
+    $('step4').hidden = !ready;
+    if (!ready) {
+      state.rows = [];
+      showMessage('日付・内容・金額の列を、手順2で選んでください。', 'error');
+      return;
+    }
+    state.rows = convert(state.table, state.headerRow, state.map);
+    if (state.rows.length === 0) {
+      $('step3').hidden = true;
+      $('step4').hidden = true;
+      showMessage('変換できる行が見つかりませんでした。列の対応を確かめてください。', 'error');
+      return;
+    }
+    showMessage(state.sourceName + ' を読み込みました（見出しは' + (state.headerRow + 1) + '行目）。', 'info');
+    renderTable();
+  }
+
+  /** 2 次元配列を読み込み、列を推定して変換する */
+  function loadTable(table, sourceName) {
+    state.table = table;
+    state.sourceName = sourceName;
+    state.headerRow = findHeaderRow(table);
+    state.map = guessMapping(table[state.headerRow] || []);
+    $('step2').hidden = false;
+    renderMapping();
+    runConvert();
+  }
+
+  /** CSV のバイト列を文字列にする。UTF-8 でなければ Shift_JIS（Excel 標準の CSV）として読む */
+  function decodeCsv(buffer) {
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    } catch (e) {
+      return new TextDecoder('shift_jis').decode(buffer);
+    }
+  }
+
+  async function readFile(file) {
+    try {
+      const buffer = await file.arrayBuffer();
+      if (/\.csv$/i.test(file.name)) {
+        loadTable(parseCSV(decodeCsv(buffer)), file.name);
+        return;
+      }
+      if (/\.xlsx?$/i.test(file.name)) {
+        if (typeof XLSX === 'undefined') {
+          showMessage('Excel を読み込む部品を取得できませんでした（通信環境をご確認ください）。CSV 形式でならお試しいただけます。', 'error');
+          return;
+        }
+        const wb = XLSX.read(buffer, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        // raw: true で日付セルをシリアル値のまま受け取り、自前の正規化にそろえる
+        loadTable(XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' }), file.name);
+        return;
+      }
+      showMessage('対応しているファイルは .xlsx / .xls / .csv です。', 'error');
+    } catch (e) {
+      showMessage('ファイルを読み込めませんでした。ファイルが壊れていないか確認してください。', 'error');
+    }
+  }
+
+  function download() {
+    const need = state.rows.filter(needsCheck).length;
+    if (need > 0 && !window.confirm('要確認が' + need + '件あります。このまま出力しますか？')) return;
+    const blob = new Blob([CSV_BOM + buildCsv(state.rows)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '仕訳データ.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  $('file-input').addEventListener('change', (ev) => {
+    const file = ev.target.files[0];
+    if (file) readFile(file);
+    ev.target.value = ''; // 同じファイルをもう一度選んでも変換し直せるようにする
+  });
+  $('btn-sample').addEventListener('click', () => loadTable(parseCSV(SAMPLE_CSV), 'サンプルデータ'));
+  $('btn-download').addEventListener('click', download);
+
+  // テストと動作確認のために変換関数を公開する
+  window.Demo = {
+    parseCSV, buildCsv, normalizeDate, parseAmount, guessDebit, guessCredit,
+    findHeaderRow, guessMapping, convert, rowIssues, rowNotes, inputTotal, outputTotal,
+    loadTable, state, SAMPLE_CSV, CSV_BOM,
+  };
+})();
+</script>
+</body>
+</html>
